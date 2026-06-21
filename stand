@@ -1,14 +1,24 @@
---// Rayfield
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
 local Window = Rayfield:CreateWindow({
-    Name = "The harmvengers",
-    LoadingTitle = "The lemonade stand",
-    LoadingSubtitle = "The duck walks up to the lemonade stand",
+    Name = "The Harmvengers",
+    LoadingTitle = "Cyber Division",
+    LoadingSubtitle = "Initializing Tycoon Protocols...",
+
     ConfigurationSaving = {
-        Enabled = false,
+        Enabled = false
     },
-    KeySystem = false,
+
+    KeySystem = true,
+    KeySettings = {
+        Title = "The Harmvengers",
+        Subtitle = "The skidvengers",
+        Note = "put in the key you skid",
+        FileName = "lemongaem",
+        SaveKey = true,
+        GrabKeyFromSite = false,
+        Key = {"Oats"} 
+    }
 })
 
 local MainTab = Window:CreateTab("Main", 4483362458)
@@ -16,109 +26,81 @@ local WorldTab = Window:CreateTab("World", 4483362458)
 local MiscTab = Window:CreateTab("Misc", 4483362458)
 local PlayerTab = Window:CreateTab("Player", 4483362458)
 
---// Services
+
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 
---// Find Tycoon
-local userTycoon = (function()
-    for _, v in pairs(workspace:GetChildren()) do
-        if v:IsA("Folder") and v.Name:match("Tycoon%d") then
-            if v:FindFirstChild("Owner") and v.Owner.Value == LocalPlayer then
-                return v
-            end
-        end
-    end
-end)()
 
-if not userTycoon then
-    Rayfield:Notify({
-        Title = "Error",
-        Content = "Tycoon not found!",
-        Duration = 5,
-    })
-    return
-end
-
-local function collectAllIncome()
-    local remotesFolder = userTycoon:FindFirstChild("Remotes")
-    if not remotesFolder then
-        return
-    end
-
-    local wakeIncome = remotesFolder:FindFirstChild("WakeIncomeStream")
-    local purchases = userTycoon:FindFirstChild("Purchases")
-
-    if not wakeIncome or not purchases then
-        return
-    end
-
-    for _, child in ipairs(purchases:GetChildren()) do
-        if child.Name ~= "Staircase" or "Minigames" then
-            local name = child.Name:gsub("%s+", "") -- remove all spaces
-
-            pcall(function()
-                wakeIncome:InvokeServer(name)
-            end)
-        end
-    end
-end
-
-task.spawn(function()
-    while true do
-        task.wait(0.25)
-
-        if AutoCollectIncome then
-            pcall(collectAllIncome)
-        end
-    end
-end)
-
-MainTab:CreateToggle({
-    Name = "Auto Collect Income",
-    CurrentValue = false,
-    Flag = "AutoCollectIncome",
-    Callback = function(Value)
-        AutoCollectIncome = Value
-
-        Rayfield:Notify({
-            Title = "Auto Collect Income",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
---// Variables
+local AutoCollectIncome = false
 local AutoBuy = false
 local AutoUpgrade = false
 local AutoFruit = false
 local AutoRebirth = false
 local AutoEvolve = false
 local AutoPowerLevel = false
-local AutoCollectIncome = false
-local AutoCashDrops = false
-local AutoAcceptPhone = false  -- NEW VARIABLE for auto-accept phone offers
+local AutoAcceptPhone = false
+local AutoMinigameRace = false
 local FlyEnabled = false
+local AntiAFK = false
+local Disable3DRendering = false
+
+-- Config States
+local BuySpeed = 1 -- NEW: Auto Buy Speed Multiplier
 local FlySpeed = 60
 local SpeedValue = 16
 local JumpValue = 50
-local AntiAFK = false
-local AntiAFKConnection
-local AutoMinigameRace = false
-local Disable3DRendering = false
-local originalStreamingMode = nil
+local RebirthGainMultiple = 1.0
+local MinPotential = 1
 
-
--- live counters for the status panel (proof the autos are actually firing)
+-- Stats
 local stats = { buys = 0, upgrades = 0, fruit = 0, rebirths = 0, evolves = 0, phone = 0 }
 
-local Buying = false
+--// [3] TYCOON FINDER
+local userTycoon = nil
+for _, v in pairs(workspace:GetChildren()) do
+    if v:IsA("Folder") and v.Name:match("Tycoon%d") then
+        if v:FindFirstChild("Owner") and v.Owner.Value == LocalPlayer then
+            userTycoon = v
+            break
+        end
+    end
+end
 
--- FASTER Auto Buy: every buyable item model has a child "Purchase" RemoteFunction
--- (e.g. ...ItemName.Purchase). We invoke it DIRECTLY instead of walking the
--- character to the button and firetouchinterest-ing it, so buying is instant and
--- works no matter where you are. The server still validates cost/availability.
+if not userTycoon then
+    Rayfield:Notify({ Title = "CTF Error", Content = "Tycoon not found! Reset script.", Duration = 5 })
+    return
+end
+
+--// [4] CORE AUTOFARM LOGIC
+
+-- Auto Collect Income (Fixed Logic Bug)
+local function collectAllIncome()
+    local remotesFolder = userTycoon:FindFirstChild("Remotes")
+    local purchases = userTycoon:FindFirstChild("Purchases")
+    if not remotesFolder or not purchases then return end
+
+    local wakeIncome = remotesFolder:FindFirstChild("WakeIncomeStream")
+    if not wakeIncome then return end
+
+    for _, child in ipairs(purchases:GetChildren()) do
+        -- BUG FIX: Changed 'or' to 'and'. "Minigames" is always truthy in Lua.
+        if child.Name ~= "Staircase" and child.Name ~= "Minigames" then
+            local name = child.Name:gsub("%s+", "")
+            pcall(function() wakeIncome:InvokeServer(name) end)
+        end
+    end
+end
+
+task.spawn(function()
+    while task.wait(0.25) do
+        if AutoCollectIncome then pcall(collectAllIncome) end
+    end
+end)
+
+-- Auto Buy (With Speed Multiplier)
 local function buyAllAffordable()
     for _, obj in ipairs(userTycoon.Purchases:GetDescendants()) do
         if obj:IsA("Model") then
@@ -135,48 +117,47 @@ local function buyAllAffordable()
     end
 end
 
+-- NEW: Fractional Counter for Buy Speed
+local buyCounter = 0
 task.spawn(function()
-    while true do
-        task.wait(0.05)   -- a few sweeps per second is plenty for direct remotes
-
+    while task.wait(0.05) do
         if AutoBuy then
-            pcall(buyAllAffordable)
+            buyCounter = buyCounter + BuySpeed
+            -- Run the function multiple times per tick if speed is > 1
+            while buyCounter >= 1 do
+                pcall(buyAllAffordable)
+                buyCounter = buyCounter - 1
+            end
+        else
+            buyCounter = 0 -- Reset when off
         end
     end
 end)
 
--- FASTER Auto Upgrade. The old version scanned thousands of tycoon objects EVERY
--- frame and fired 100 server calls per machine per frame (huge FPS/network drag).
--- Now we cache the Upgrade remotes, refreshing only every 3s (to catch tycoon
--- rebuilds), and each machine just climbs from its last reached level upward,
--- stopping as soon as the server rejects (can't afford / maxed). Once maxed it
--- costs ~nothing. The level tracker resets on refresh so it re-climbs as cash grows.
-local upgradeRemotes  = {}
-local upgradeLevel    = {}   -- [remote] = highest level reached this scan window
+-- Auto Upgrade
+local upgradeRemotes = {}
+local upgradeLevel = {}
 local lastUpgradeScan = 0
 
 local function refreshUpgradeRemotes()
     upgradeRemotes = {}
-    upgradeLevel   = {}
+    upgradeLevel = {}
     local purchases = userTycoon:FindFirstChild("Purchases")
     if not purchases then return end
     for _, obj in ipairs(purchases:GetDescendants()) do
         if obj:IsA("RemoteFunction") and obj.Name == "Upgrade" then
-            upgradeRemotes[#upgradeRemotes + 1] = obj
+            table.insert(upgradeRemotes, obj)
         end
     end
 end
 
 task.spawn(function()
-    while true do
-        task.wait(0.25)
-
+    while task.wait(0.25) do
         if AutoUpgrade then
             if tick() - lastUpgradeScan > 3 then
                 refreshUpgradeRemotes()
                 lastUpgradeScan = tick()
             end
-
             for _, remote in ipairs(upgradeRemotes) do
                 if remote.Parent then
                     local lvl = (upgradeLevel[remote] or 0) + 1
@@ -193,194 +174,80 @@ task.spawn(function()
     end
 end)
 
--- NEW: Auto Accept Phone Offers
--- Listens for when a phone offer appears and automatically accepts it
-local function setupPhoneOfferAutoAccept()
-    -- Find all tycoons (we need to monitor offers from all, but prioritize owned)
-    local function acceptOfferFromTycoon(tycoon)
-        local phoneOffer = tycoon:FindFirstChild("Remotes") and 
-                           tycoon.Remotes:FindFirstChild("PhoneOffer")
-        if phoneOffer then
-            pcall(function()
-                phoneOffer:FireServer("Accept")
-                stats.phone = stats.phone + 1
-            end)
-        end
-    end
-
-    -- Check all tycoons periodically (phone offers can appear in any tycoon)
-    task.spawn(function()
-        while true do
-            task.wait(0.5) -- Check every half second for phone offers
-            
-            if AutoAcceptPhone then
-                -- First check the player's owned tycoon
-                if userTycoon then
-                    acceptOfferFromTycoon(userTycoon)
-                end
-                
-                -- Also check other tycoons (some phone offers might be global)
-                for _, tycoon in pairs(workspace:GetChildren()) do
-                    if tycoon:IsA("Folder") and tycoon.Name:match("Tycoon%d") then
-                        if tycoon ~= userTycoon then -- Avoid double-checking owned
-                            acceptOfferFromTycoon(tycoon)
-                        end
-                    end
-                end
-            end
-        end
-    end)
-    
-    -- Also listen for when PhoneOffer remote appears (real-time detection)
-    local function onRemoteAdded(remote)
-        if AutoAcceptPhone and remote.Name == "PhoneOffer" and remote:IsA("RemoteFunction") then
-            pcall(function()
-                remote:FireServer("Accept")
-                stats.phone = stats.phone + 1
-            end)
-        end
-    end
-    
-    -- Monitor all tycoons for new remotes
-    for _, tycoon in pairs(workspace:GetChildren()) do
-        if tycoon:IsA("Folder") and tycoon.Name:match("Tycoon%d") then
-            local remotes = tycoon:FindFirstChild("Remotes")
-            if remotes then
-                remotes.ChildAdded:Connect(onRemoteAdded)
-            end
-        end
-    end
-end
-
--- Initialize the phone offer auto-accept system
-setupPhoneOfferAutoAccept()
-
---// Auto Power Level (RemoteFunction userTycoon.Remotes.UpgradePowerLevel)
--- Experimental: calls UpgradePowerLevel repeatedly; the server validates cost.
--- If the game needs an argument here we'll see it do nothing (harmless, pcall'd)
--- and can probe the exact arg like we did for WakeIncomeStream.
-local function getPowerLevelRemote()
-    local remotes = userTycoon:FindFirstChild("Remotes")
-    return remotes and remotes:FindFirstChild("UpgradePowerLevel")
-end
-
+-- Auto Accept Phone (Performance Fix)
 task.spawn(function()
-    while true do
-        task.wait(0.25)
-
-        if AutoPowerLevel then
-            local remote = getPowerLevelRemote()
-            if remote then
-                pcall(function() remote:InvokeServer() end)
+    while task.wait(0.5) do
+        if AutoAcceptPhone and userTycoon then
+            local remotes = userTycoon:FindFirstChild("Remotes")
+            local phoneOffer = remotes and remotes:FindFirstChild("PhoneOffer")
+            if phoneOffer then
+                pcall(function()
+                    phoneOffer:FireServer("Accept")
+                    stats.phone = stats.phone + 1
+                end)
             end
         end
     end
 end)
 
-
---// Disable 3D Rendering to Reduce Lag
-local function enable3DRendering()
-    if originalStreamingMode ~= nil then
-        workspace.Streaming.StreamingMode = originalStreamingMode
-        originalStreamingMode = nil
+-- Auto Power Level
+task.spawn(function()
+    while task.wait(0.25) do
+        if AutoPowerLevel then
+            local remotes = userTycoon:FindFirstChild("Remotes")
+            local remote = remotes and remotes:FindFirstChild("UpgradePowerLevel")
+            if remote then pcall(function() remote:InvokeServer() end) end
+        end
     end
+end)
+
+-- Auto Click Minigame Race Button (Fixed via getconnections)
+local function autoClickRaceButton()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return end
     
-    -- Re-enable the camera if it was disabled
-    local camera = workspace.CurrentCamera
-    if camera then
-        camera.CameraType = Enum.CameraType.Custom
-    end
-end
-
-local function disable3DRendering()
-    if originalStreamingMode == nil then
-        originalStreamingMode = workspace.Streaming.StreamingMode
-    end
+    local minigameRace = playerGui:FindFirstChild("MinigameRace")
+    if not minigameRace then return end
     
-    -- Set streaming mode to manual to stop rendering distant objects
-    workspace.Streaming.StreamingMode = Enum.StreamingMode.Manual
-    
-    -- Force set camera to a fixed position or disable certain rendering features
-    local camera = workspace.CurrentCamera
-    if camera then
-        -- This reduces rendering load significantly
-        camera.CameraType = Enum.CameraType.Scriptable
+    local function findButton(parent)
+        if parent:IsA("TextButton") or parent:IsA("ImageButton") then return parent end
+        for _, child in ipairs(parent:GetChildren()) do
+            local btn = findButton(child)
+            if btn then return btn end
+        end
+        return nil
     end
-    
-    -- Clear streaming grid to stop loading new chunks
-    workspace.Streaming.TargetRadius = 0
-end
 
--- Function to toggle 3D rendering
-local function toggle3DRendering(disable)
-    if disable then
-        pcall(function()
-            disable3DRendering()
-            
-            -- Optional: Hide terrain and certain parts to improve performance
-            local terrain = workspace:FindFirstChild("Terrain")
-            if terrain then
-                terrain.WaterReflectance = 0
-                terrain.WaterWaveSize = 0
-                terrain.WaterTransparency = 1
-            end
-            
-            -- Reduce part rendering quality
-            workspace.GlobalRenderingQualityLevel = 1
-        end)
-    else
-        pcall(function()
-            enable3DRendering()
-            
-            -- Restore terrain settings
-            local terrain = workspace:FindFirstChild("Terrain")
-            if terrain then
-                terrain.WaterReflectance = 0.5
-                terrain.WaterWaveSize = 0.5
-                terrain.WaterTransparency = 0.5
-            end
-            
-            -- Restore rendering quality
-            workspace.GlobalRenderingQualityLevel = 2
-        end)
+    local button = findButton(minigameRace)
+    if not button then return end
+
+    if getconnections then
+        local activated = getconnections(button.Activated)
+        if #activated > 0 then
+            for _, conn in ipairs(activated) do conn:Fire() end return
+        end
+        local mouseClick = getconnections(button.MouseButton1Click)
+        if #mouseClick > 0 then
+            for _, conn in ipairs(mouseClick) do conn:Fire() end return
+        end
+    end
+
+    if button.AbsoluteSize.X > 0 and button.AbsoluteSize.Y > 0 then
+        local VirtualInputManager = game:GetService("VirtualInputManager")
+        local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
+        VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
     end
 end
 
--- Cleanup function when script ends
-local function cleanupRendering()
-    if Disable3DRendering then
-        enable3DRendering()
+task.spawn(function()
+    while task.wait(0.25) do
+        if AutoMinigameRace then pcall(autoClickRaceButton) end
     end
-end
+end)
 
--- Add cleanup when GUI is destroyed (optional, near the Destroy GUI button)
---// Auto Rebirth — OPTIMAL (RemoteFunction userTycoon.Remotes.Rebirth:InvokeServer())
--- Reads the rebirth menu's "Rebirth to get... X investors" value and only
--- rebirths when it's worth it, so we don't waste tycoon rebuilds (which crash
--- the client if spammed). Each investor = +1% cash.
---
---   RebirthGainMultiple : rebirth when (pending investors) >= (current) * this.
---                         1.0 = the classic "only rebirth to at least DOUBLE
---                         your investors" rule. Raise it (e.g. 2.0) to rebirth
---                         less often for bigger jumps; lower it (0.25) for more.
---   MinPotential        : never rebirth for fewer than this many investors.
-local RebirthGainMultiple = 1.0
-local MinPotential        = 1
-local RebirthCooldown     = 2     -- seconds to let the tycoon rebuild after each rebirth
-local RebirthTimeout      = 8     -- max seconds to wait for "Rebirthed" before next
-local rebirthBusy         = false
-
-local function getRebirthRemote()
-    local remotes = userTycoon:FindFirstChild("Remotes")
-    return remotes and remotes:FindFirstChild("Rebirth")
-end
-
-local function getRebirthedSignal()
-    local remotes = userTycoon:FindFirstChild("Remotes")
-    return remotes and remotes:FindFirstChild("Rebirthed")
-end
-
--- parse word/abbrev formatted numbers like "457.345 billion" or "22.4Qn"
+--// [5] REBIRTH & EVOLVE SYSTEMS
 local NUM_SCALE = {
     thousand=1e3, million=1e6, billion=1e9, trillion=1e12, quadrillion=1e15,
     quintillion=1e18, sextillion=1e21, septillion=1e24, octillion=1e27,
@@ -390,6 +257,7 @@ local NUM_SCALE = {
     novemdecillion=1e60, vigintillion=1e63,
     k=1e3, m=1e6, b=1e9, t=1e12, qd=1e15, qn=1e18, sx=1e21, sp=1e24,
 }
+
 local function parseNumber(s)
     if not s then return nil end
     s = tostring(s):gsub(",", ""):lower()
@@ -401,1077 +269,323 @@ local function parseNumber(s)
     return val
 end
 
--- read the InvestorsMenu values (works whether or not the menu is open)
-local function investorBody()
+local function readQuantity(frameName)
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     local r  = pg and pg:FindFirstChild("Rebirth")
     local im = r and r:FindFirstChild("InvestorsMenu")
-    return im and im:FindFirstChild("Body")
-end
-local function readQuantity(frameName)
-    local body  = investorBody()
+    
+    -- GHOST UI FIX: Force menu visible but off-screen so the server updates the text
+    if im then
+        if not im.Visible then
+            im.Visible = true
+            pcall(function() 
+                -- Move it 5000 pixels off-screen so you can't see it
+                im.Position = UDim2.new(0, -5000, 0, -5000) 
+                -- Strip the background colors so it doesn't block clicks if it somehow loads
+                for _, desc in ipairs(im:GetDescendants()) do
+                    if desc:IsA("Frame") then desc.BackgroundTransparency = 1 end
+                end
+            end)
+        end
+    end
+
+    local body  = im and im:FindFirstChild("Body")
     local frame = body and body:FindFirstChild(frameName)
     local q     = frame and frame:FindFirstChild("Quantity")
     return q and parseNumber(q.Text)
 end
-local function getCurrentInvestors()   return readQuantity("Amount")    or 0 end
-local function getPotentialInvestors() return readQuantity("Potential")       end
 
+
+local rebirthBusy = false
 task.spawn(function()
-    while true do
-        task.wait(0.5)
-
+    while task.wait(0.5) do
         if AutoRebirth and not rebirthBusy then
-            local remote    = getRebirthRemote()
-            local potential = getPotentialInvestors()
-            local current   = getCurrentInvestors()
+            local remotes = userTycoon:FindFirstChild("Remotes")
+            local remote = remotes and remotes:FindFirstChild("Rebirth")
+            local potential = readQuantity("Potential")
+            local current = readQuantity("Amount") or 0
 
-            -- optimal gate: only rebirth when the payout is worth it
-            local worthIt = remote and potential
-                and potential >= MinPotential
-                and potential >= current * RebirthGainMultiple
-
-            if worthIt then
+            if remote and potential and potential >= MinPotential and potential >= current * RebirthGainMultiple then
                 rebirthBusy = true
-
-                pcall(function()
-                    local done   = false
-                    local signal = getRebirthedSignal()
-                    local conn
-                    if signal and signal:IsA("RemoteEvent") then
-                        conn = signal.OnClientEvent:Connect(function() done = true end)
-                    end
-
-                    remote:InvokeServer()   -- yields until the server responds
-                    stats.rebirths = stats.rebirths + 1
-
-                    local t = 0
-                    while not done and t < RebirthTimeout do
-                        task.wait(0.1)
-                        t = t + 0.1
-                    end
-                    if conn then conn:Disconnect() end
-                end)
-
-                task.wait(RebirthCooldown)   -- let the tycoon settle before next
+                pcall(function() remote:InvokeServer() end)
+                stats.rebirths = stats.rebirths + 1
+                task.wait(2)
                 rebirthBusy = false
             end
         end
     end
 end)
 
---// Auto Click Minigame Race Button
---// Auto Click Minigame Race Button
---// Auto Click Minigame Race Button
-local function autoClickRaceButton()
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not playerGui then return end
-    
-    local minigameRace = playerGui:FindFirstChild("MinigameRace")
-    if not minigameRace then return end
-    
-    local button = minigameRace:FindFirstChild("Button")
-    if button and button:IsA("TextButton") then
-        -- Method 1: Use VirtualInputManager (most reliable)
-        local VirtualInputManager = game:GetService("VirtualInputManager")
-        if VirtualInputManager then
-            local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
-            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
-            task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
-        end
-        
-        -- Method 2: Use fireproximityprompt if there's a prompt
-        local prompt = button:FindFirstChildOfClass("ProximityPrompt")
-        if prompt then
-            fireproximityprompt(prompt)
-        end
-        
-        -- Method 3: Trigger any RemoteEvent inside the button
-        for _, child in ipairs(button:GetChildren()) do
-            if child:IsA("RemoteEvent") then
-                pcall(function()
-                    child:FireServer()
-                end)
-            end
-        end
-    end
-end
-
+local evolveBusy = false
 task.spawn(function()
-    while true do
-        task.wait(0.1)
-        
-        if AutoMinigameRace then
-            pcall(autoClickRaceButton)
-        end
-    end
-end)
-
---// Auto Evolve — OPTIMAL (RemoteFunction userTycoon.Remotes.Evolve)
--- Evolution gives x10 income SPEED each, but you can only evolve once the
--- evolution progress bar fills. We read EvolutionMenu.Body.Progress ("1.9%")
--- and evolve when it reaches EvolveAt%. Waits for the "Evolved" event, like rebirth.
-local EvolveAt        = 100   -- % progress required before evolving (100 = full bar)
-local EvolveCooldown  = 2
-local EvolveTimeout   = 8
-local evolveBusy      = false
-
-local function getEvolveRemote()
-    local remotes = userTycoon:FindFirstChild("Remotes")
-    return remotes and remotes:FindFirstChild("Evolve")
-end
-local function getEvolvedSignal()
-    local remotes = userTycoon:FindFirstChild("Remotes")
-    return remotes and remotes:FindFirstChild("Evolved")
-end
-local function getEvolveProgress()
-    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    local r  = pg and pg:FindFirstChild("Rebirth")
-    local em = r and r:FindFirstChild("EvolutionMenu")
-    local body = em and em:FindFirstChild("Body")
-    local p  = body and body:FindFirstChild("Progress")
-    if not p then return nil end
-    return tonumber(tostring(p.Text):match("[%d%.]+"))
-end
-
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-
+    while task.wait(0.5) do
         if AutoEvolve and not evolveBusy then
-            local remote   = getEvolveRemote()
-            local progress = getEvolveProgress()
+            local remotes = userTycoon:FindFirstChild("Remotes")
+            local remote = remotes and remotes:FindFirstChild("Evolve")
+            
+            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            local r  = pg and pg:FindFirstChild("Rebirth")
+            local em = r and r:FindFirstChild("EvolutionMenu")
+            local body = em and em:FindFirstChild("Body")
+            local p  = body and body:FindFirstChild("Progress")
+            local progress = p and tonumber(tostring(p.Text):match("[%d%.]+"))
 
-            if remote and progress and progress >= EvolveAt then
+            if remote and progress and progress >= 100 then
                 evolveBusy = true
-                pcall(function()
-                    local done   = false
-                    local signal = getEvolvedSignal()
-                    local conn
-                    if signal and signal:IsA("RemoteEvent") then
-                        conn = signal.OnClientEvent:Connect(function() done = true end)
-                    end
-                    remote:InvokeServer()
-                    stats.evolves = stats.evolves + 1
-                    local t = 0
-                    while not done and t < EvolveTimeout do
-                        task.wait(0.1); t = t + 0.1
-                    end
-                    if conn then conn:Disconnect() end
-                end)
-                task.wait(EvolveCooldown)
+                pcall(function() remote:InvokeServer() end)
+                stats.evolves = stats.evolves + 1
+                task.wait(2)
                 evolveBusy = false
             end
         end
     end
 end)
 
---// Pull All Levers — the 4 colored sewer door levers (Map.Sewer.Doors*.Lever).
--- They're touch-activated (no prompt/clickdetector), so we firetouchinterest each
--- one. Also touches the sewer collectible keys (CashVine / SewerAlien) so the run
--- actually pays out. Returns how many levers it pulled.
+--// [6] WORLD FEATURES (Sewer, Trees, Fruit, Cash)
+
+local function touchPart(hrp, part)
+    pcall(function() firetouchinterest(hrp, part, 0); firetouchinterest(hrp, part, 1) end)
+end
+
 local function pullAllLevers()
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return 0 end
-
     local map   = workspace:FindFirstChild("Map")
     local sewer = map and map:FindFirstChild("Sewer")
     local root  = sewer or workspace
-
     local pulled = 0
     for _, o in ipairs(root:GetDescendants()) do
         if o:IsA("BasePart") and (o.Name == "Lever" or string.find(string.lower(o.Name), "lever", 1, true)) then
-            pcall(function()
-                firetouchinterest(hrp, o, 0)
-                firetouchinterest(hrp, o, 1)
-            end)
-            pulled = pulled + 1
+            touchPart(hrp, o); pulled = pulled + 1
         end
     end
-
-    -- touch the sewer collectible keys so the reward is actually grabbed
     if sewer then
         for _, o in ipairs(sewer:GetDescendants()) do
-            if o:IsA("BasePart") and (o.Name == "VineKey" or o.Name == "UFOKey") then
-                pcall(function()
-                    firetouchinterest(hrp, o, 0)
-                    firetouchinterest(hrp, o, 1)
-                end)
-            end
+            if o:IsA("BasePart") and (o.Name == "VineKey" or o.Name == "UFOKey") then touchPart(hrp, o) end
         end
     end
-
     return pulled
 end
 
---// Sewer Run — pull levers + grab keys + open door from where you are (these
--- fire fine at range), then TELEPORT only to the CashVine to harvest the reward.
-local function touchPart(hrp, part)
-    pcall(function()
-        firetouchinterest(hrp, part, 0)
-        firetouchinterest(hrp, part, 1)
-    end)
-end
-
 local function doSewerRun()
-    local char = LocalPlayer.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false, "no character" end
-
-    local map   = workspace:FindFirstChild("Map")
-    local sewer = map and map:FindFirstChild("Sewer")
-    if not sewer then return false, "sewer not loaded" end
-
-    -- 1) pull all levers (fired in place)
-    for _, o in ipairs(sewer:GetDescendants()) do
-        if o:IsA("BasePart") and string.find(string.lower(o.Name), "lever", 1, true) then
-            touchPart(hrp, o)
-        end
-    end
-
-    -- 2) grab the keys (VineKey = door key, UFOKey = investor boost)
+    local char = LocalPlayer.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return false end
+    local map = workspace:FindFirstChild("Map"); local sewer = map and map:FindFirstChild("Sewer"); if not sewer then return false end
+    for _, o in ipairs(sewer:GetDescendants()) do if o:IsA("BasePart") and string.find(string.lower(o.Name), "lever", 1, true) then touchPart(hrp, o) end end
     for _, folderName in ipairs({ "CashVine", "SewerAlien" }) do
         local folder = sewer:FindFirstChild(folderName)
-        if folder then
-            for _, o in ipairs(folder:GetDescendants()) do
-                if o:IsA("BasePart") and (o.Name == "VineKey" or o.Name == "UFOKey") then
-                    touchPart(hrp, o)
-                end
-            end
-        end
+        if folder then for _, o in ipairs(folder:GetDescendants()) do if o:IsA("BasePart") and (o.Name == "VineKey" or o.Name == "UFOKey") then touchPart(hrp, o) end end end
     end
     task.wait(0.3)
-
     local cashVine = sewer:FindFirstChild("CashVine")
-
-    -- 3) open the VineDoor (fired in place; we now hold the key)
     if cashVine then
         local vineDoor = cashVine:FindFirstChild("VineDoor")
-        if vineDoor then
-            for _, o in ipairs(vineDoor:GetDescendants()) do
-                if o:IsA("BasePart") then touchPart(hrp, o) end
-            end
-        end
+        if vineDoor then for _, o in ipairs(vineDoor:GetDescendants()) do if o:IsA("BasePart") then touchPart(hrp, o) end end end
     end
     task.wait(0.3)
-
-    -- 4) TELEPORT to the CashVine and harvest it
     if cashVine then
         local vineModel = cashVine:FindFirstChild("CashVine")
         if vineModel then
-            local pivot = vineModel:GetPivot()
-            pcall(function() hrp.CFrame = pivot + Vector3.new(0, -7, 0) end)
+            pcall(function() hrp.CFrame = vineModel:GetPivot() + Vector3.new(0, -7, 0) end)
             task.wait(0.2)
-            for _, o in ipairs(vineModel:GetDescendants()) do
-                if o:IsA("BasePart") then touchPart(hrp, o) end
-            end
+            for _, o in ipairs(vineModel:GetDescendants()) do if o:IsA("BasePart") then touchPart(hrp, o) end end
         end
     end
-
     return true
 end
 
---// Teleport to the Sewer Alien — fixed coordinates
-local SEWER_ALIEN_POS = Vector3.new(-42, -41, 180)
-
 local function teleportToAlien()
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        return false, "no character"
-    end
-
-    local oldCFrame = hrp.CFrame
-
-    -- teleport to alien
-    hrp.CFrame = CFrame.new(SEWER_ALIEN_POS)
-
-    task.wait(0.5)
-
-    local prompt = workspace:FindFirstChild("Map")
-        and workspace.Map:FindFirstChild("Sewer")
-        and workspace.Map.Sewer:FindFirstChild("SewerAlien")
-        and workspace.Map.Sewer.SewerAlien:FindFirstChild("Alien")
-        and workspace.Map.Sewer.SewerAlien.Alien:FindFirstChild("HumanoidRootPart")
-        and workspace.Map.Sewer.SewerAlien.Alien.HumanoidRootPart:FindFirstChild("Prompt")
-
-    if prompt and prompt:IsA("ProximityPrompt") then
-        pcall(function()
-            prompt.HoldDuration = 0
-            fireproximityprompt(prompt)
-        end)
-    end
-
-    task.wait(1)
-
-    hrp.CFrame = oldCFrame
-
-    return true
+    local char = LocalPlayer.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return false end
+    local oldCFrame = hrp.CFrame; hrp.CFrame = CFrame.new(-42, -41, 180); task.wait(0.5)
+    local prompt = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Sewer") and workspace.Map.Sewer:FindFirstChild("SewerAlien") and workspace.Map.Sewer.SewerAlien:FindFirstChild("Alien") and workspace.Map.Sewer.SewerAlien.Alien:FindFirstChild("HumanoidRootPart") and workspace.Map.Sewer.SewerAlien.Alien.HumanoidRootPart:FindFirstChild("Prompt")
+    if prompt and prompt:IsA("ProximityPrompt") then pcall(function() prompt.HoldDuration = 0; fireproximityprompt(prompt) end) end
+    task.wait(1); hrp.CFrame = oldCFrame; return true
 end
 
 local Trees = {}
-
-local function addTree(obj)
-    if obj:IsA("Model") and obj.Name == "LemonTree" then
-
-        if not table.find(Trees, obj) then
-            table.insert(Trees, obj)
-        end
-    end
-end
-
-local function removeTree(obj)
-
-    local index = table.find(Trees, obj)
-
-    if index then
-        table.remove(Trees, index)
-    end
-end
-
--- initial scan
-for _, v in ipairs(workspace:GetDescendants()) do
-    addTree(v)
-end
-
--- realtime update
+local function addTree(obj) if obj:IsA("Model") and obj.Name == "LemonTree" and not table.find(Trees, obj) then table.insert(Trees, obj) end end
+local function removeTree(obj) local i = table.find(Trees, obj); if i then table.remove(Trees, i) end end
+for _, v in ipairs(workspace:GetDescendants()) do addTree(v) end
 workspace.DescendantAdded:Connect(addTree)
 workspace.DescendantRemoving:Connect(removeTree)
 
-local function noCollisionTree(tree)
-
-    for _, obj in ipairs(tree:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            obj.CanCollide = false
+task.spawn(function()
+    while task.wait(0.1) do
+        if AutoFruit then
+            for _, tree in ipairs(Trees) do
+                if not AutoFruit then break end
+                if tree and tree.Parent then
+                    pcall(function()
+                        local char = LocalPlayer.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+                        for _, obj in ipairs(tree:GetDescendants()) do if obj:IsA("BasePart") then obj.CanCollide = false end end
+                        hrp.CFrame = tree:GetPivot() + Vector3.new(0, 5, 0)
+                        for _, obj in ipairs(tree:GetDescendants()) do
+                            if obj:IsA("BasePart") and obj.Name == "Fruit" then
+                                obj.CanCollide = false; local clickPart = obj:FindFirstChild("ClickPart")
+                                if clickPart then local detector = clickPart:FindFirstChildOfClass("ClickDetector"); if detector then task.wait(0.45); fireclickdetector(detector); stats.fruit = stats.fruit + 1 end end
+                            end
+                        end
+                    end)
+                end
+            end
         end
     end
-end
-
-local function teleportToTree(tree)
-
-    local character = LocalPlayer.Character
-    if not character then
-        return false
-    end
-
-    local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        return false
-    end
-
-    local cf = tree:GetPivot()
-
-    hrp.CFrame = cf + Vector3.new(0, 5, 0)
-
-    return true
-end
+end)
 
 local CashDropConnection
-
-local function collectCashDrop(drop)
-    local character = LocalPlayer.Character
-    local hrp = character and character:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        return
-    end
-
-    local part
-
-    if drop:IsA("BasePart") then
-        part = drop
-    else
-        for _, obj in ipairs(drop:GetDescendants()) do
-            if obj:IsA("TouchTransmitter") then
-                part = obj.Parent
-                break
-            end
-        end
-    end
-
-    if part then
-        pcall(function()
-            firetouchinterest(hrp, part, 0)
-            firetouchinterest(hrp, part, 1)
-        end)
-    end
-end
-
 local function startCashDrops()
-    local cashDrops = workspace:FindFirstChild("CashDrops")
-    if not cashDrops then
-        return
-    end
-
-    -- collect existing drops
-    for _, drop in ipairs(cashDrops:GetChildren()) do
-        task.spawn(collectCashDrop, drop)
-    end
-
-    CashDropConnection = cashDrops.ChildAdded:Connect(function(drop)
-        task.wait()
-        collectCashDrop(drop)
-    end)
+    stopCashDrops(); local cashDrops = workspace:FindFirstChild("CashDrops"); if not cashDrops then return end
+    local function collect(drop) local char = LocalPlayer.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return end; local part = drop:IsA("BasePart") and drop or nil; if not part then for _, obj in ipairs(drop:GetDescendants()) do if obj:IsA("TouchTransmitter") then part = obj.Parent; break end end end; if part then pcall(function() firetouchinterest(hrp, part, 0); firetouchinterest(hrp, part, 1) end) end end
+    for _, drop in ipairs(cashDrops:GetChildren()) do task.spawn(collect, drop) end
+    CashDropConnection = cashDrops.ChildAdded:Connect(function(drop) task.wait(); collect(drop) end)
 end
+local function stopCashDrops() if CashDropConnection then CashDropConnection:Disconnect(); CashDropConnection = nil end end
 
-local function stopCashDrops()
-    if CashDropConnection then
-        CashDropConnection:Disconnect()
-        CashDropConnection = nil
-    end
-end
+--// [7] PLAYER MODIFIERS
 
-
-local function collectFruit(tree)
-
-    noCollisionTree(tree)
-
-    local success = teleportToTree(tree)
-
-    if not success then
-        return
-    end
-
-    for _, obj in ipairs(tree:GetDescendants()) do
-
-        if obj:IsA("BasePart") and obj.Name == "Fruit" then
-
-            obj.CanCollide = false
-
-            local clickPart = obj:FindFirstChild("ClickPart")
-
-            if clickPart then
-
-                local detector = clickPart:FindFirstChildOfClass("ClickDetector")
-
-                if detector then
-
-                    task.wait(0.45)
-
-                    pcall(function()
-                        fireclickdetector(detector)
-                    end)
-                    stats.fruit = stats.fruit + 1
-                end
-            end
-        end
-    end
-end
-
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-
-        if AutoFruit then
-
-            for _, tree in ipairs(Trees) do
-
-                if not AutoFruit then
-                    break
-                end
-
-                if tree and tree.Parent then
-
-                    pcall(function()
-                        collectFruit(tree)
-                    end)
-                end
-            end
-        end
-    end
-end)
-
-
-MainTab:CreateToggle({
-    Name = "Auto Buy",
-    CurrentValue = false,
-    Flag = "AutoBuy",
-    Callback = function(Value)
-        AutoBuy = Value
-
-        Rayfield:Notify({
-            Title = "Auto Buy",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-MainTab:CreateToggle({
-    Name = "Auto Upgrade",
-    CurrentValue = false,
-    Flag = "AutoUpgrade",
-    Callback = function(Value)
-        AutoUpgrade = Value
-
-        Rayfield:Notify({
-            Title = "Auto Upgrade",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-MainTab:CreateToggle({
-    Name = "Auto Race (bugged)",
-    CurrentValue = false,
-    Flag = "AutoMinigameRace",
-    Callback = function(Value)
-        AutoMinigameRace = Value
-        
-        Rayfield:Notify({
-            Title = "Auto Minigame Race",
-            Content = Value and "Enabled (will auto-click race button)" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-WorldTab:CreateToggle({
-    Name = "Auto Fruit",
-    CurrentValue = false,
-    Flag = "AutoFruit",
-    Callback = function(Value)
-        AutoFruit = Value
-
-        Rayfield:Notify({
-            Title = "Auto Fruit",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-WorldTab:CreateToggle({
-    Name = "Auto Cash Drops",
-    CurrentValue = false,
-    Flag = "AutoCashDrops",
-    Callback = function(Value)
-        AutoCashDrops = Value
-
-        if Value then
-            startCashDrops()
-        else
-            stopCashDrops()
-        end
-
-        Rayfield:Notify({
-            Title = "Auto Cash Drops",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
--- NEW TOGGLE: Auto Accept Phone Offers
-MainTab:CreateToggle({
-    Name = "Accept Trades",
-    CurrentValue = false,
-    Flag = "AutoAcceptPhone",
-    Callback = function(Value)
-        AutoAcceptPhone = Value
-
-        Rayfield:Notify({
-            Title = "Auto Accept Phone Offers",
-            Content = Value and "Enabled (will automatically accept phone offers)" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-MiscTab:CreateToggle({
-    Name = "Auto Rebirth",
-    CurrentValue = false,
-    Flag = "AutoRebirth",
-    Callback = function(Value)
-        AutoRebirth = Value
-
-        if Value and not getRebirthRemote() then
-            Rayfield:Notify({
-                Title = "Auto Rebirth",
-                Content = "Rebirth remote not found in your tycoon!",
-                Duration = 5,
-            })
-            return
-        end
-
-        Rayfield:Notify({
-            Title = "Auto Rebirth",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-MiscTab:CreateToggle({
-    Name = "Auto Evolve (x10 income)",
-    CurrentValue = false,
-    Flag = "AutoEvolve",
-    Callback = function(Value)
-        AutoEvolve = Value
-
-        if Value and not getEvolveRemote() then
-            Rayfield:Notify({
-                Title = "Auto Evolve",
-                Content = "Evolve remote not found in your tycoon!",
-                Duration = 5,
-            })
-            return
-        end
-
-        Rayfield:Notify({
-            Title = "Auto Evolve",
-            Content = Value and "Enabled (evolves at full progress)" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-MiscTab:CreateToggle({
-    Name = "Auto Power Level",
-    CurrentValue = false,
-    Flag = "AutoPowerLevel",
-    Callback = function(Value)
-        AutoPowerLevel = Value
-
-        Rayfield:Notify({
-            Title = "Auto Power Level",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-local function teleportToBase()
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
-    if not hrp or not userTycoon then
-        return false
-    end
-
-    -- Try a few common spawn/base parts first
-    local target =
-        userTycoon:FindFirstChild("SpawnLocation", true)
-        or userTycoon:FindFirstChild("Spawn", true)
-        or userTycoon:FindFirstChild("ClaimPart", true)
-
-    if target and target:IsA("BasePart") then
-        hrp.CFrame = target.CFrame + Vector3.new(0, 5, 0)
-    else
-        -- fallback to tycoon center
-        hrp.CFrame = userTycoon:GetPivot() + Vector3.new(0, 5, 0)
-    end
-
-    return true
-end
-
-WorldTab:CreateButton({
-    Name = "Pull All Levers (sewer)",
-    Callback = function()
-        local n = pullAllLevers()
-        Rayfield:Notify({
-            Title = "Pull All Levers",
-            Content = n > 0 and ("Pulled " .. n .. " lever(s) + grabbed sewer keys")
-                or "No levers found (is the sewer loaded?)",
-            Duration = 4,
-        })
-    end,
-})
-
-WorldTab:CreateButton({
-    Name = "Claim Vine Harvest",
-    Callback = function()
-        Rayfield:Notify({
-            Title = "Vine Harvest",
-            Content = "Running...",
-            Duration = 2
-        })
-
-        task.spawn(function()
-            local char = LocalPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
-            local oldCFrame
-            if hrp then
-                oldCFrame = hrp.CFrame
-            end
-
-            local ok, err = doSewerRun()
-
-            if ok and oldCFrame and hrp then
-                task.wait(1)
-                pcall(function()
-                    hrp.CFrame = oldCFrame
-                end)
-            end
-
-            Rayfield:Notify({
-                Title = "Vine Harvest",
-                Content = ok
-                    and "Done! Levers pulled, keys grabbed, vine harvested."
-                    or ("Failed: " .. tostring(err)),
-                Duration = 5,
-            })
-        end)
-    end,
-})
-
-WorldTab:CreateButton({
-    Name = "Claim 2x investors (need 100+ investors)",
-    Callback = function()
-        local ok, err = teleportToAlien()
-        Rayfield:Notify({
-            Title = "Teleport to Sewer Alien",
-            Content = ok and "Teleported to the sewer alien (UFO)" or ("Failed: " .. tostring(err)),
-            Duration = 3,
-        })
-    end,
-})
-
-WorldTab:CreateButton({
-    Name = "Goto tycoon",
-    Callback = function()
-        local ok = teleportToBase()
-
-        Rayfield:Notify({
-            Title = "Teleport To Base",
-            Content = ok and "Teleported to your tycoon." or "Failed to find your tycoon.",
-            Duration = 3,
-        })
-    end,
-})
-
-local VirtualUser = game:GetService("VirtualUser")
-
-local function enableAntiAFK()
-    if AntiAFKConnection then return end
-
-    AntiAFKConnection = LocalPlayer.Idled:Connect(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton2(Vector2.new())
-    end)
-end
-
-local function disableAntiAFK()
-    if AntiAFKConnection then
-        AntiAFKConnection:Disconnect()
-        AntiAFKConnection = nil
-    end
-end
-
-MiscTab:CreateToggle({
-    Name = "Anti AFK",
-    CurrentValue = false,
-    Flag = "AntiAFK",
-    Callback = function(Value)
-        AntiAFK = Value
-
-        if Value then
-            enableAntiAFK()
-        else
-            disableAntiAFK()
-        end
-
-        Rayfield:Notify({
-            Title = "Anti AFK",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
-    end,
-})
-
-MiscTab:CreateToggle({
-    Name = "Disable 3D Rendering (Reduce Lag)",
-    CurrentValue = false,
-    Flag = "Disable3DRendering",
-    Callback = function(Value)
-        Disable3DRendering = Value
-        
-        toggle3DRendering(Value)
-        
-        Rayfield:Notify({
-            Title = "3D Rendering",
-            Content = Value and "3D rendering disabled (lag reduced)" or "3D rendering re-enabled",
-            Duration = 3,
-        })
-        
-        -- Additional notification for warning
-        if Value then
-            Rayfield:Notify({
-                Title = "Warning",
-                Content = "You may not see some objects. Toggle off to restore.",
-                Duration = 5,
-            })
-        end
-    end,
-})
-
-MiscTab:CreateButton({
-    Name = "Destroy GUI",
-    Callback = function()
-        Rayfield:Destroy()
-    end,
-})
-
-
-
-PlayerTab:CreateSlider({
-    Name = "WalkSpeed",
-    Range = {16, 200},
-    Increment = 1,
-    CurrentValue = 16,
-    Callback = function(Value)
-        SpeedValue = Value
-
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = Value
-        end
-    end,
-})
-
-PlayerTab:CreateSlider({
-    Name = "JumpPower",
-    Range = {50, 250},
-    Increment = 1,
-    CurrentValue = 50,
-    Callback = function(Value)
-        JumpValue = Value
-
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.JumpPower = Value
-        end
-    end,
-})
-
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-
-local flyVelocity
-local flyGyro
-
+-- Modern Flight
+local flyAttachment, linearVel, alignOri
 local function startFly()
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    flyVelocity = Instance.new("BodyVelocity")
-    flyVelocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-    flyVelocity.Velocity = Vector3.zero
-    flyVelocity.Parent = hrp
-
-    flyGyro = Instance.new("BodyGyro")
-    flyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-    flyGyro.CFrame = hrp.CFrame
-    flyGyro.Parent = hrp
+    local char = LocalPlayer.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return end; stopFly()
+    flyAttachment = Instance.new("Attachment"); flyAttachment.Parent = hrp
+    linearVel = Instance.new("LinearVelocity"); linearVel.Attachment0 = flyAttachment; linearVel.MaxForce = Vector3.new(math.huge,math.huge,math.huge); linearVel.VectorVelocity = Vector3.zero; linearVel.Parent = hrp
+    alignOri = Instance.new("AlignOrientation"); alignOri.Attachment0 = flyAttachment; alignOri.MaxTorque = math.huge; alignOri.Mode = Enum.OrientationAlignmentMode.OneAttachment; alignOri.Parent = hrp
 end
-
-local function stopFly()
-    if flyVelocity then flyVelocity:Destroy() end
-    if flyGyro then flyGyro:Destroy() end
-end
-
-local FLIGHT_ACCEL = 0.15 -- lower = smoother, higher = snappier
+local function stopFly() if linearVel then linearVel:Destroy() end; if alignOri then alignOri:Destroy() end; if flyAttachment then flyAttachment:Destroy() end end
 
 RunService.RenderStepped:Connect(function()
-    if not FlyEnabled then return end
-
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp or not flyVelocity then return end
-
-    local cam = workspace.CurrentCamera
-    local moveDir = Vector3.zero
-
-    if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-        moveDir += cam.CFrame.LookVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-        moveDir -= cam.CFrame.LookVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-        moveDir -= cam.CFrame.RightVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-        moveDir += cam.CFrame.RightVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-        moveDir += Vector3.new(0, 1, 0)
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-        moveDir -= Vector3.new(0, 1, 0)
-    end
-
-    local targetVelocity =
-        moveDir.Magnitude > 0 and moveDir.Unit * FlySpeed or Vector3.zero
-
-    flyVelocity.Velocity =
-        flyVelocity.Velocity:Lerp(targetVelocity, FLIGHT_ACCEL)
-
-    flyGyro.CFrame = cam.CFrame
+    if not FlyEnabled or not linearVel or not alignOri then return end
+    local char = LocalPlayer.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+    local cam = workspace.CurrentCamera; local moveDir = Vector3.zero
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += cam.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= cam.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= cam.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += cam.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then moveDir -= Vector3.new(0, 1, 0) end
+    linearVel.VectorVelocity = moveDir.Magnitude > 0 and moveDir.Unit * FlySpeed or Vector3.zero
+    alignOri.CFrame = cam.CFrame
 end)
 
+-- Respawn Persistence
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(1)
+    if FlyEnabled then startFly() end
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then if SpeedValue ~= 16 then hum.WalkSpeed = SpeedValue end; if JumpValue ~= 50 then hum.JumpPower = JumpValue end end
+end)
 
-PlayerTab:CreateToggle({
-    Name = "Flight",
-    CurrentValue = false,
-    Callback = function(Value)
-        FlyEnabled = Value
-
-        if Value then
-            startFly()
+-- 3D Rendering
+local function toggle3DRendering(disable)
+    pcall(function()
+        if disable then
+            settings().Rendering.QualityLevel = 1
+            for _, v in pairs(game.Lighting:GetChildren()) do if v:IsA("PostEffect") or v:IsA("Atmosphere") then v.Enabled = false end end
+            workspace.Terrain.WaterReflectance = 0; workspace.Terrain.WaveSize = 0; workspace.Terrain.WaterTransparency = 1
         else
-            stopFly()
+            settings().Rendering.QualityLevel = 3
+            for _, v in pairs(game.Lighting:GetChildren()) do if v:IsA("PostEffect") or v:IsA("Atmosphere") then v.Enabled = true end end
+            workspace.Terrain.WaterReflectance = 0.3; workspace.Terrain.WaveSize = 0.3; workspace.Terrain.WaterTransparency = 0.3
         end
+    end)
+end
 
-        Rayfield:Notify({
-            Title = "Flight",
-            Content = Value and "Enabled" or "Disabled",
-            Duration = 3,
-        })
+--// [8] UI CREATION
+
+MainTab:CreateToggle({ Name = "Auto Collect Income", CurrentValue = false, Flag = "AutoCollectIncome", Callback = function(V) AutoCollectIncome = V end })
+MainTab:CreateToggle({ Name = "Auto Buy", CurrentValue = false, Flag = "AutoBuy", Callback = function(V) AutoBuy = V end })
+MainTab:CreateToggle({ Name = "Auto Upgrade", CurrentValue = false, Flag = "AutoUpgrade", Callback = function(V) AutoUpgrade = V end })
+
+-- AUTO BUY SPEED CONTROLS
+MainTab:CreateSlider({
+    Name = "Auto Buy Speed",
+    Range = {1, 10},
+    Increment = 1,
+    CurrentValue = 1,
+    Callback = function(Value)
+        BuySpeed = Value
+        Rayfield:Notify({ Title = "Buy Speed", Content = "Set to " .. BuySpeed .. "x", Duration = 2 })
     end,
 })
 
-PlayerTab:CreateInput({
-    Name = "Flight Speed",
-    PlaceholderText = "Enter speed (e.g. 60, 120, 200)",
+MainTab:CreateInput({
+    Name = "Auto Buy Speed (Exact)",
+    PlaceholderText = "Speed multiplier (e.g. 0.5, 50, 1000)",
     RemoveTextAfterFocusLost = false,
     Callback = function(Text)
         local num = tonumber(Text)
         if num then
-            FlySpeed = math.clamp(num, 10, 500)
-
-            Rayfield:Notify({
-                Title = "Flight Speed",
-                Content = "Set to " .. FlySpeed,
-                Duration = 2,
-            })
+            BuySpeed = math.clamp(num, 0, math.huge) 
+            Rayfield:Notify({ Title = "Buy Speed", Content = "Set to " .. string.format("%.2f", BuySpeed) .. "x", Duration = 2 })
         else
-            Rayfield:Notify({
-                Title = "Flight Speed",
-                Content = "Invalid number",
-                Duration = 2,
-            })
+            Rayfield:Notify({ Title = "Buy Speed", Content = "Invalid number.", Duration = 2 })
         end
     end,
 })
 
+MainTab:CreateToggle({ Name = "Accept Trades (Phone)", CurrentValue = false, Flag = "AutoAcceptPhone", Callback = function(V) AutoAcceptPhone = V end })
 
+WorldTab:CreateToggle({ Name = "Auto Fruit", CurrentValue = false, Flag = "AutoFruit", Callback = function(V) AutoFruit = V end })
+WorldTab:CreateButton({ Name = "Pull All Levers (sewer)", Callback = function() local n = pullAllLevers(); Rayfield:Notify({Title="Lever Pull", Content=n>0 and "Pulled "..n.." levers" or "None found", Duration=3}) end })
+WorldTab:CreateButton({ Name = "Claim Vine Harvest", Callback = function() task.spawn(function() local ok = doSewerRun(); Rayfield:Notify({Title="Vine", Content=ok and "Done" or "Failed", Duration=3}) end) end })
+WorldTab:CreateButton({ Name = "Claim 2x investors", Callback = function() teleportToAlien() end })
+WorldTab:CreateButton({ Name = "Goto tycoon", Callback = function() local char = LocalPlayer.Character; local hrp = char and char:FindFirstChild("HumanoidRootPart"); if hrp then hrp.CFrame = userTycoon:GetPivot() + Vector3.new(0,5,0) end end })
 
+MiscTab:CreateToggle({ Name = "Auto Rebirth", CurrentValue = false, Flag = "AutoRebirth", Callback = function(V) AutoRebirth = V end })
+MiscTab:CreateSlider({ Name = "Rebirth Multiplier", Range = {1, 50}, Increment = 1, CurrentValue = 5, Callback = function(V) RebirthGainMultiple = V end })
+MiscTab:CreateInput({ Name = "Rebirth Multiplier (exact)", PlaceholderText = "e.g. 1.5, 2.0", RemoveTextAfterFocusLost = false, Callback = function(T) local n = tonumber(T); if n then RebirthGainMultiple = math.clamp(n,0,math.huge) end end })
+MiscTab:CreateInput({ Name = "Minimum Investors", PlaceholderText = "e.g. 1, 10", RemoveTextAfterFocusLost = false, Callback = function(T) local n = tonumber(T); if n and n>=0 then MinPotential = math.floor(n) end end })
 
+MiscTab:CreateToggle({ Name = "Auto Evolve", CurrentValue = false, Flag = "AutoEvolve", Callback = function(V) AutoEvolve = V end })
+MiscTab:CreateToggle({ Name = "Anti AFK", CurrentValue = false, Flag = "AntiAFK", Callback = function(V) AntiAFK = V; if V then LocalPlayer.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new()) end) end end })
+MiscTab:CreateToggle({ Name = "Disable 3D Rendering", CurrentValue = false, Flag = "Disable3DRendering", Callback = function(V) Disable3DRendering = V; toggle3DRendering(V) end })
+MiscTab:CreateButton({ Name = "Destroy GUI", Callback = function() Rayfield:Destroy() end })
 
---// LIVE STATUS PANEL — proves the autos are firing (counters tick, FPS, cash).
--- Native Instance.new GUI (Delta-safe), draggable, parented to PlayerGui.
+PlayerTab:CreateToggle({ Name = "Flight", CurrentValue = false, Callback = function(V) FlyEnabled = V; if V then startFly() else stopFly() end end })
+PlayerTab:CreateInput({ Name = "Flight Speed", PlaceholderText = "e.g. 60, 120", RemoveTextAfterFocusLost = false, Callback = function(T) local n = tonumber(T); if n then FlySpeed = math.clamp(n, 10, 500) end end })
+PlayerTab:CreateSlider({ Name = "WalkSpeed", Range = {16, 200}, Increment = 1, CurrentValue = 16, Callback = function(V) SpeedValue = V; local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid"); if hum then hum.WalkSpeed = V end end })
+PlayerTab:CreateSlider({ Name = "JumpPower", Range = {50, 250}, Increment = 1, CurrentValue = 50, Callback = function(V) JumpValue = V; local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid"); if hum then hum.JumpPower = V end end })
+
+--// [9] LIVE STATUS PANEL
 task.spawn(function()
-    local parent = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not parent then
-        local okh, hui = pcall(function() return gethui() end)
-        parent = (okh and hui) or game:GetService("CoreGui")
-    end
-    pcall(function()
-        local old = parent:FindFirstChild("AutoStatusGui")
-        if old then old:Destroy() end
-    end)
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "AutoStatusGui"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 9999
-    gui.Parent = parent
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 200, 0, 190)  -- Increased height to accommodate phone counter
-    frame.Position = UDim2.new(0, 10, 0, 90)
-    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-    frame.BackgroundTransparency = 0.1
-    frame.BorderSizePixel = 0
-    frame.Active = true
-    frame.Parent = gui
+    local parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or game:GetService("CoreGui")
+    pcall(function() local old = parent:FindFirstChild("AutoStatusGui"); if old then old:Destroy() end end)
+    local gui = Instance.new("ScreenGui"); gui.Name = "AutoStatusGui"; gui.ResetOnSpawn = false; gui.Parent = parent
+    local frame = Instance.new("Frame"); frame.Size = UDim2.new(0, 200, 0, 190); frame.Position = UDim2.new(0, 10, 0, 90); frame.BackgroundColor3 = Color3.fromRGB(18, 18, 24); frame.BackgroundTransparency = 0.1; frame.BorderSizePixel = 0; frame.Active = true; frame.Parent = gui
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 24)
-    title.BackgroundColor3 = Color3.fromRGB(38, 40, 54)
-    title.BorderSizePixel = 0
-    title.Text = "AUTO STATUS"
-    title.TextColor3 = Color3.fromRGB(120, 235, 140)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 13
-    title.Parent = frame
-    Instance.new("UICorner", title).CornerRadius = UDim.new(0, 8)
-
-    local body = Instance.new("TextLabel")
-    body.Size = UDim2.new(1, -12, 1, -30)
-    body.Position = UDim2.new(0, 8, 0, 28)
-    body.BackgroundTransparency = 1
-    body.TextXAlignment = Enum.TextXAlignment.Left
-    body.TextYAlignment = Enum.TextYAlignment.Top
-    body.RichText = true
-    body.Text = "starting..."
-    body.TextColor3 = Color3.fromRGB(235, 235, 245)
-    body.Font = Enum.Font.Code
-    body.TextSize = 12
-    body.Parent = frame
-
-    -- drag (mouse + touch)
-    local UIS = game:GetService("UserInputService")
-    local dragging, ds, sp
-    title.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-           or i.UserInputType == Enum.UserInputType.Touch then
-            dragging, ds, sp = true, i.Position, frame.Position
-            i.Changed:Connect(function()
-                if i.UserInputState == Enum.UserInputState.End then dragging = false end
-            end)
-        end
-    end)
-    UIS.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
-           or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - ds
-            frame.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
-        end
-    end)
-
-    -- FPS counter
-    local RunService = game:GetService("RunService")
+    local title = Instance.new("TextLabel"); title.Size = UDim2.new(1, 0, 0, 24); title.BackgroundColor3 = Color3.fromRGB(38, 40, 54); title.BorderSizePixel = 0; title.Text = "PLOPO STATUS"; title.TextColor3 = Color3.fromRGB(120, 235, 140); title.Font = Enum.Font.GothamBold; title.TextSize = 13; title.Parent = frame
+    local body = Instance.new("TextLabel"); body.Size = UDim2.new(1, -12, 1, -30); body.Position = UDim2.new(0, 8, 0, 28); body.BackgroundTransparency = 1; body.TextXAlignment = Enum.TextXAlignment.Left; body.TextYAlignment = Enum.TextYAlignment.Top; body.RichText = true; body.TextColor3 = Color3.fromRGB(235, 235, 245); body.Font = Enum.Font.Code; body.TextSize = 12; body.Parent = frame
     local frames, fps, fpsT = 0, 0, tick()
-    RunService.RenderStepped:Connect(function()
-        frames = frames + 1
-        if tick() - fpsT >= 1 then fps, frames, fpsT = frames, 0, tick() end
-    end)
-
+    RunService.RenderStepped:Connect(function() frames = frames + 1; if tick() - fpsT >= 1 then fps, frames, fpsT = frames, 0, tick() end end)
     local function on(b) return b and "<font color='#7CFF7C'>ON</font>" or "<font color='#777'>off</font>" end
-
     while gui.Parent do
-        local cashStr = "?"
-        local ls = LocalPlayer:FindFirstChild("leaderstats")
-        local c  = ls and ls:FindFirstChild("Cash")
-        if c then cashStr = tostring(c.Value) end
-
-        body.Text = string.format(
-            "FPS:  %d\nCash: %s\n"
-          .. "Buys:  %d  %s\nUpgr:  %d  %s\nFruit: %d  %s\nReb:   %d  %s\nEvo:   %d  %s\nPhone: %d  %s",
-            fps, cashStr,
-            stats.buys,     on(AutoBuy),
-            stats.upgrades, on(AutoUpgrade),
-            stats.fruit,    on(AutoFruit),
-            stats.rebirths, on(AutoRebirth),
-            stats.evolves,  on(AutoEvolve),
-            stats.phone,    on(AutoAcceptPhone)
-        )
+        local cashStr = "?"; local ls = LocalPlayer:FindFirstChild("leaderstats"); local c = ls and ls:FindFirstChild("Cash"); if c then cashStr = tostring(c.Value) end
+        body.Text = string.format("FPS:  %d\nCash: %s\nBuys:  %d  %s\nUpgr:  %d  %s\nFruit: %d  %s\nReb:   %d  %s\nEvo:   %d  %s\nPhone: %d  %s", fps, cashStr, stats.buys, on(AutoBuy), stats.upgrades, on(AutoUpgrade), stats.fruit, on(AutoFruit), stats.rebirths, on(AutoRebirth), stats.evolves, on(AutoEvolve), stats.phone, on(AutoAcceptPhone))
         task.wait(0.25)
     end
 end)
 
-Rayfield:Notify({
-    Title = "Loaded",
-    Content = "Tycoon Autofarm Loaded Successfully",
-    Duration = 5,
-})
+local tuff1 = userTycoon.Remotes.ChangeLabel
+tuff1:InvokeServer(
+    "LemonStand",
+    "Oats tuff boi"
+)
+task.wait(5)
+local tuff2 = userTycoon.Remotes.ChangeLabel
+tuff2:InvokeServer(
+    "DepotBillboard",
+    "The oatlings"
+)
+
+task.wait(5)
+local tuff3 = userTycoon.Remotes.ChangeLabel
+tuff3:InvokeServer(
+    "LemonDash",
+    "We're so Tuff"
+)
+task.wait(7.5)
+local tuff4 = userTycoon.Remotes.ChangeLabel
+tuff4:InvokeServer(
+    "LemonDepot",
+    "Skibidi toit"
+)
